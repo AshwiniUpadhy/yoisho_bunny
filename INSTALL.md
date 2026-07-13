@@ -1,7 +1,9 @@
 # yoisho_bunny — Installation & Implementation Guide
 
 Step-by-step guide for deploying the Bunny.net media offload app onto a Frappe LMS bench.  
-Run these steps once per environment (staging → production).
+Run these steps once per environment (local dev → staging → production).
+
+**GitHub repo:** `https://github.com/AshwiniUpadhy/yoisho_bunny` (private)
 
 ---
 
@@ -11,18 +13,40 @@ Run these steps once per environment (staging → production).
 - SSH access to the server (needed once for installation; not needed for day-to-day operation after)
 - Bunny.net account with two Storage Zones and two Pull Zones created (public + private)
 - Bunny.net credentials ready (see **Step 3**)
+- SSH deploy key added to the server (see **Step 1**)
 
 ---
 
-## Step 1 — Copy the app onto the server
+## Step 1 — Set up SSH deploy key on the server (one-time per server)
 
-Transfer the `yoisho_bunny` folder to the server. Place it anywhere outside the bench, for example:
+The repo is private, so each server needs a deploy key to clone it.
 
+**On the server:**
+```bash
+# Generate a deploy key (no passphrase)
+ssh-keygen -t ed25519 -C "deploy-yoisho_bunny" -f ~/.ssh/id_ed25519_yoisho -N ""
+
+# Print the public key — copy this
+cat ~/.ssh/id_ed25519_yoisho.pub
 ```
-/home/<user>/apps/yoisho_bunny
+
+**On GitHub:** Go to `github.com/AshwiniUpadhy/yoisho_bunny → Settings → Deploy keys → Add deploy key`  
+Paste the public key. Read-only access is sufficient.
+
+**Add an SSH alias on the server** — append to `~/.ssh/config`:
+```
+Host github-yoisho
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_ed25519_yoisho
+    IdentitiesOnly yes
 ```
 
-Or clone/copy it to that path via `scp`, `rsync`, or git.
+**Test:**
+```bash
+ssh -T git@github-yoisho
+# Expected: Hi AshwiniUpadhy! You've successfully authenticated...
+```
 
 ---
 
@@ -31,26 +55,55 @@ Or clone/copy it to that path via `scp`, `rsync`, or git.
 SSH into the server and run the following from inside the bench directory:
 
 ```bash
-cd /path/to/your/bench
+cd ~/lms_backend/lms-bench        # staging path; adjust for production
+source env/bin/activate
 
-# 1. Install the Python package into the bench virtualenv
-./env/bin/python -m pip install -e /home/<user>/apps/yoisho_bunny
+# 1. Fetch and install the app from GitHub
+bench get-app git@github-yoisho:AshwiniUpadhy/yoisho_bunny.git
 
-# 2. Register the app in the bench app list
-echo "yoisho_bunny" >> sites/apps.txt
-
-# 3. Install the app on the site
+# 2. Install the app on the site
 bench --site <your-site> install-app yoisho_bunny
 
-# 4. Run migrations (syncs hooks, scheduled jobs, etc.)
+# 3. Run migrations (syncs hooks, scheduled jobs, etc.)
 bench --site <your-site> migrate
 
-# 5. Restart the bench
+# 4. Restart the bench
 bench restart
 ```
 
-> **Note:** If `bench restart` is not available (e.g. production with supervisor/systemd),
-> restart the web + worker processes using your process manager instead.
+> **Note:** `bench restart` calls `supervisorctl restart frappe:` in production.
+> If that fails, restart via your process manager or `sudo systemctl restart <service>`.
+
+### Local dev install (from local git repo, no server needed)
+
+```bash
+cd /path/to/lms-bench
+source env/bin/activate
+
+bench get-app file:///home/tr-ashwini/Desktop/Ashwini_projects/yoisho_bunny
+bench --site lms_site.com install-app yoisho_bunny
+bench --site lms_site.com migrate
+# Restart honcho (Ctrl-C and re-run) or: bench restart
+```
+
+### Uninstall procedure (if needed)
+
+```bash
+bench --site <your-site> uninstall-app yoisho_bunny --yes
+bench remove-app yoisho_bunny
+```
+
+Frappe archives the removed app to `archived/apps/yoisho_bunny-<date>` automatically.
+
+### Update the app (after pushing new commits to GitHub)
+
+```bash
+cd apps/yoisho_bunny
+git pull
+cd ../..
+bench --site <your-site> migrate
+bench restart
+```
 
 ---
 
