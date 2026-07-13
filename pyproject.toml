@@ -1,0 +1,18 @@
+[project]
+name = "yoisho_bunny"
+authors = [{ name = "Yoisho", email = "dev@yoisho.in" }]
+description = "Offload Frappe LMS File storage to Bunny.net Edge Storage + CDN"
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+dependencies = [
+    # `requests` ships with Frappe; listed for clarity.
+    "requests",
+]
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.flit.module]
+name = "yoisho_bunny"

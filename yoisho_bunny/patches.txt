@@ -1,0 +1,2 @@
+# Patches for yoisho_bunny. One entry per line, applied on `bench migrate`.
+# (none yet — backfill is run explicitly via bench execute, not as a patch)
