@@ -1462,4 +1462,59 @@ def _apply_cdn_fallback_patch():
         )
 
 
+def _cdn_redirect_before_request():
+    """
+    Frappe before_request hook — fallback CDN redirect for /files/ misses that
+    reach Flask before the StaticDataMiddleware patch is active (e.g., first
+    request after a process restart).
+
+    The StaticDataMiddleware patch (above) is the primary redirect path and
+    requires no DB.  This hook covers the cold-start gap: it runs inside
+    Flask's request pipeline (after frappe.connect()) and returns a redirect
+    response before Frappe's own file-serving logic can raise an exception.
+    """
+    import os
+    try:
+        path = frappe.local.request.path if hasattr(frappe.local, "request") else ""
+        if not path.startswith("/files/"):
+            return
+
+        site = frappe.local.site
+        if not site:
+            return
+
+        bench_path = frappe.utils.get_bench_path()
+        local_path = os.path.join(bench_path, "sites", site, "public", path.lstrip("/"))
+        if os.path.exists(local_path):
+            return  # file exists locally — serve normally
+
+        cfg = frappe.conf
+        if not cfg.get("bunny_enabled") or not cfg.get("bunny_public_host"):
+            return
+
+        raw_lp = cfg.get("bunny_local_patterns", [])
+        if isinstance(raw_lp, str) and raw_lp.strip():
+            try:
+                import json as _json
+                raw_lp = _json.loads(raw_lp)
+            except Exception:
+                raw_lp = [
+                    p.strip()
+                    for p in raw_lp.strip("[] ").replace('"', "").split(",")
+                    if p.strip()
+                ]
+        if any(path.startswith(p) for p in (raw_lp if isinstance(raw_lp, list) else [])):
+            return
+
+        cdn_url = cfg.get("bunny_public_host").rstrip("/") + path
+        qs = frappe.local.request.query_string.decode("utf-8", errors="replace")
+        if qs:
+            cdn_url += "?" + qs
+
+        from werkzeug.utils import redirect as _redirect
+        return _redirect(cdn_url, 302)
+    except Exception:
+        return  # never break the request pipeline
+
+
 _apply_cdn_fallback_patch()

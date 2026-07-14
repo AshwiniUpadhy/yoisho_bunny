@@ -38,3 +38,17 @@ scheduler_events = {
     ],
     # "daily_long": ["yoisho_bunny.bunny.run_purge"],   # phase 2 — enable later
 }
+
+# ---------------------------------------------------------------------------
+# CDN fallback: redirect /files/ misses to Bunny before Frappe's handler runs.
+# This covers the cold-start gap where the StaticDataMiddleware patch hasn't
+# been applied yet (first request after a process restart).
+# ---------------------------------------------------------------------------
+before_request = ["yoisho_bunny.bunny._cdn_redirect_before_request"]
+
+# Force bunny.py to be imported (and StaticDataMiddleware to be patched) as
+# soon as any request loads these hooks — not just when a File doc event fires.
+try:
+    from yoisho_bunny.bunny import _apply_cdn_fallback_patch as _p; _p()
+except Exception:
+    pass
