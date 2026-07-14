@@ -1397,6 +1397,7 @@ def _apply_cdn_fallback_patch():
         def _bunny_call(self, environ, start_response):
             import json
             import os
+            import logging as _log
             from werkzeug.exceptions import NotFound
 
             try:
@@ -1405,28 +1406,32 @@ def _apply_cdn_fallback_patch():
                 path = environ.get("PATH_INFO", "")
                 if not path.startswith("/files/"):
                     raise
-
-                site = _bunny_resolve_site(environ)
-                if not site:
-                    raise
-
-                config_path = os.path.join(_bunny_bench_root(), "sites", site, "site_config.json")
                 try:
+                    site = _bunny_resolve_site(environ)
+                    if not site:
+                        raise NotFound()
+
+                    config_path = os.path.join(_bunny_bench_root(), "sites", site, "site_config.json")
                     with open(config_path) as f:
                         cfg = json.load(f)
-                except Exception:
+
+                    if not cfg.get("bunny_enabled") or not cfg.get("bunny_public_host"):
+                        raise NotFound()
+
+                    cdn_url = cfg["bunny_public_host"].rstrip("/") + path
+                    qs = environ.get("QUERY_STRING", "")
+                    if qs:
+                        cdn_url += "?" + qs
+
+                    from werkzeug.utils import redirect as _redirect
+                    return _redirect(cdn_url, 302)(environ, start_response)
+                except NotFound:
                     raise
-
-                if not cfg.get("bunny_enabled") or not cfg.get("bunny_public_host"):
-                    raise
-
-                cdn_url = cfg["bunny_public_host"].rstrip("/") + path
-                qs = environ.get("QUERY_STRING", "")
-                if qs:
-                    cdn_url += "?" + qs
-
-                from werkzeug.utils import redirect as _redirect
-                return _redirect(cdn_url, 302)(environ, start_response)
+                except Exception as _exc:
+                    _log.getLogger("yoisho_bunny").warning(
+                        "CDN fallback error for %s: %s", path, _exc
+                    )
+                    raise NotFound()
 
         StaticDataMiddleware.__call__ = _bunny_call
         StaticDataMiddleware._bunny_patched = True
