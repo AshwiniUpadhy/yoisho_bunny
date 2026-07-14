@@ -1303,14 +1303,17 @@ def cleanup_orphans(dry_run=True):
 # 11. CDN FALLBACK — redirect /files/... to Bunny when local copy is gone
 # =========================================================================== #
 #
-# Frappe's StaticDataMiddleware (a Werkzeug SharedDataMiddleware subclass)
-# raises werkzeug.exceptions.NotFound when the requested file doesn't exist
-# locally — bypassing Flask entirely, so before_request hooks can't intercept.
+# When a /files/ request arrives, StaticDataMiddleware (a Werkzeug
+# SharedDataMiddleware subclass) tries to serve the file from disk.  If the
+# file is missing it does NOT raise NotFound — it falls through to the Frappe
+# Flask app, which tries to open a DB connection.  If MariaDB is under load
+# ("Too many connections") that results in a 500, not a 404.
 #
 # Fix: patch StaticDataMiddleware.__call__ (a CLASS method, so Python's dynamic
-# method lookup means the patch applies even to the already-created instance in
-# application_with_statics()).  The wrapper catches NotFound for /files/ paths,
-# reads site_config.json directly, and issues a 302 to the Bunny CDN URL.
+# method lookup means the patch applies to the already-created instance too).
+# The wrapper PRE-CHECKS whether the local file exists BEFORE calling through
+# to Flask.  If the file is missing and bunny_enabled=1, it issues a 302 to
+# the Bunny CDN URL — reading site_config.json directly, never touching the DB.
 #
 # This module is imported on the first request (after StaticDataMiddleware is
 # already instantiated), so patching __call__ — not __init__ or
@@ -1383,9 +1386,9 @@ def _bunny_resolve_site(environ):
 
 def _apply_cdn_fallback_patch():
     """
-    Wrap StaticDataMiddleware.__call__ once so that NotFound for /files/ paths
-    becomes a 302 redirect to the Bunny CDN when bunny_enabled=1.
-    Idempotent — safe to call multiple times.
+    Wrap StaticDataMiddleware.__call__ once so that missing /files/ are
+    redirected to the Bunny CDN (302) when bunny_enabled=1, without ever
+    touching the database.  Idempotent — safe to call multiple times.
     """
     try:
         from frappe.middlewares import StaticDataMiddleware
@@ -1400,38 +1403,54 @@ def _apply_cdn_fallback_patch():
             import logging as _log
             from werkzeug.exceptions import NotFound
 
-            try:
-                return _original_call(self, environ, start_response)
-            except NotFound:
-                path = environ.get("PATH_INFO", "")
-                if not path.startswith("/files/"):
-                    raise
+            path = environ.get("PATH_INFO", "")
+
+            # Pre-check: if the file is missing locally for a /files/ path,
+            # redirect to Bunny BEFORE falling through to Flask (which would
+            # try to open a DB connection and may 500 under load).
+            if path.startswith("/files/"):
                 try:
                     site = _bunny_resolve_site(environ)
-                    if not site:
-                        raise NotFound()
+                    if site:
+                        bench_root = _bunny_bench_root()
+                        local_path = os.path.join(
+                            bench_root, "sites", site, "public", path.lstrip("/")
+                        )
+                        if not os.path.exists(local_path):
+                            config_path = os.path.join(
+                                bench_root, "sites", site, "site_config.json"
+                            )
+                            with open(config_path) as _f:
+                                cfg = json.load(_f)
 
-                    config_path = os.path.join(_bunny_bench_root(), "sites", site, "site_config.json")
-                    with open(config_path) as f:
-                        cfg = json.load(f)
+                            if cfg.get("bunny_enabled") and cfg.get("bunny_public_host"):
+                                # Respect bunny_local_patterns — never redirect
+                                # files that are pinned to local storage.
+                                raw_lp = cfg.get("bunny_local_patterns", [])
+                                if isinstance(raw_lp, str) and raw_lp.strip():
+                                    try:
+                                        raw_lp = json.loads(raw_lp)
+                                    except Exception:
+                                        raw_lp = [
+                                            p.strip()
+                                            for p in raw_lp.strip("[] ").replace('"', "").split(",")
+                                            if p.strip()
+                                        ]
+                                local_patterns = list(raw_lp) if isinstance(raw_lp, list) else []
 
-                    if not cfg.get("bunny_enabled") or not cfg.get("bunny_public_host"):
-                        raise NotFound()
-
-                    cdn_url = cfg["bunny_public_host"].rstrip("/") + path
-                    qs = environ.get("QUERY_STRING", "")
-                    if qs:
-                        cdn_url += "?" + qs
-
-                    from werkzeug.utils import redirect as _redirect
-                    return _redirect(cdn_url, 302)(environ, start_response)
-                except NotFound:
-                    raise
+                                if not any(path.startswith(p) for p in local_patterns):
+                                    cdn_url = cfg["bunny_public_host"].rstrip("/") + path
+                                    qs = environ.get("QUERY_STRING", "")
+                                    if qs:
+                                        cdn_url += "?" + qs
+                                    from werkzeug.utils import redirect as _redirect
+                                    return _redirect(cdn_url, 302)(environ, start_response)
                 except Exception as _exc:
                     _log.getLogger("yoisho_bunny").warning(
-                        "CDN fallback error for %s: %s", path, _exc
+                        "CDN fallback pre-check error for %s: %s", path, _exc
                     )
-                    raise NotFound()
+
+            return _original_call(self, environ, start_response)
 
         StaticDataMiddleware.__call__ = _bunny_call
         StaticDataMiddleware._bunny_patched = True
