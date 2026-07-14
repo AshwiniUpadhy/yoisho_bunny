@@ -70,7 +70,7 @@ _TUNABLE = {
     "enabled", "offload_enabled", "reconcile_enabled",
     "region", "public_host", "private_host",
     "public_zone", "private_zone", "public_folders", "signed_url_ttl",
-    "delete_on_upload",
+    "delete_on_upload", "local_patterns",
 }
 
 
@@ -108,11 +108,12 @@ def offload_enabled():
 
 
 def delete_on_upload():
-    """Delete local file immediately after a confirmed Bunny upload.
+    """Delete local PUBLIC file immediately after a confirmed Bunny upload.
 
-    OFF by default — keeps the local copy so Frappe Desk can still serve
-    /files/ requests directly. Enable on production only, where nginx is
-    configured with `try_files $uri @cdn` to fall back to Bunny on 404.
+    OFF by default. When ON, public /files/ originals are removed from disk
+    after upload — the CDN fallback patch serves them from Bunny on future
+    requests. Private files are NEVER deleted locally regardless of this flag:
+    Frappe's permission-checked /private/files/ handler needs them on disk.
     Set via: bench --site <site> set-config bunny_delete_on_upload 1
     """
     v = _setting("delete_on_upload")
@@ -163,6 +164,27 @@ def public_folders():
         # accept a comma- or JSON-list string when set via set_setting()
         val = [p.strip() for p in val.strip("[] ").replace('"', "").split(",") if p.strip()]
     return val if isinstance(val, list) and val else DEFAULT_PUBLIC_FOLDERS
+
+
+def local_patterns():
+    """File URL prefixes that must stay on Frappe and are never offloaded to Bunny.
+
+    Use for logos, favicons, and any file that must be served directly by Frappe.
+    Configure in site_config.json:
+        "bunny_local_patterns": ["/files/logo", "/files/favicon", "/files/brand/"]
+    Files whose file_url starts with any of these prefixes are skipped by
+    offload(), backfill, and verify_sample.
+    """
+    val = _setting("local_patterns")
+    if isinstance(val, str) and val.strip():
+        val = [p.strip() for p in val.strip("[] ").replace('"', "").split(",") if p.strip()]
+    return list(val) if isinstance(val, list) else []
+
+
+def _is_local_only(file_url):
+    """True if file_url matches a local_patterns prefix — must stay on Frappe."""
+    patterns = local_patterns()
+    return bool(patterns and any(file_url.startswith(p) for p in patterns))
 
 
 def is_configured(kind):
@@ -341,6 +363,8 @@ def offload(doc):
     file_url = doc.file_url or ""
     if not _is_managed_url(file_url):
         return False  # external URL / unexpected path — not ours to manage
+    if _is_local_only(file_url):
+        return False  # pinned to local Frappe storage by bunny_local_patterns
 
     kind = _zone_kind(doc.is_private)
     if not is_configured(kind):
@@ -370,7 +394,8 @@ def on_file_after_insert(doc, method=None):
     if not offload_enabled():
         return
     try:
-        if offload(doc) and delete_on_upload():
+        is_private = int(doc.is_private or 0)
+        if offload(doc) and delete_on_upload() and not is_private:
             _delete_local(doc)
     except Exception:
         _log(f"after_insert offload crashed for {getattr(doc, 'name', '?')}\n\n{frappe.get_traceback()}")
@@ -393,8 +418,9 @@ def on_file_on_update(doc, method=None):
         if int(doc.is_private or 0):
             if is_configured("public"):
                 delete_object("public", key)
-            if offload(doc) and delete_on_upload():
-                _delete_local(doc)
+            offload(doc)
+            # Never delete private files locally — Frappe's permission-checked
+            # /private/files/ handler needs them on disk for secure serving.
         else:
             if offload(doc) and delete_on_upload():
                 _delete_local(doc)
@@ -603,6 +629,9 @@ def backfill_run(dry_run=True, limit=None):
 def _backfill_one(r, dry_run, stats):
     file_url = r.get("file_url") or ""
     if not file_url.startswith(("/files/", "/private/files/")):
+        stats["skipped"] += 1
+        return
+    if _is_local_only(file_url):
         stats["skipped"] += 1
         return
     kind = _zone_kind(r.get("is_private"))
