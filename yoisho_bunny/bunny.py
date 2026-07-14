@@ -108,12 +108,10 @@ def offload_enabled():
 
 
 def delete_on_upload():
-    """Delete local PUBLIC file immediately after a confirmed Bunny upload.
+    """Delete local file immediately after a confirmed Bunny upload.
 
-    OFF by default. When ON, public /files/ originals are removed from disk
-    after upload — the CDN fallback patch serves them from Bunny on future
-    requests. Private files are NEVER deleted locally regardless of this flag:
-    Frappe's permission-checked /private/files/ handler needs them on disk.
+    OFF by default — keeps the local copy so Frappe can still serve requests
+    directly. Enable on production once the CDN fallback patch is confirmed working.
     Set via: bench --site <site> set-config bunny_delete_on_upload 1
     """
     v = _setting("delete_on_upload")
@@ -394,8 +392,7 @@ def on_file_after_insert(doc, method=None):
     if not offload_enabled():
         return
     try:
-        is_private = int(doc.is_private or 0)
-        if offload(doc) and delete_on_upload() and not is_private:
+        if offload(doc) and delete_on_upload():
             _delete_local(doc)
     except Exception:
         _log(f"after_insert offload crashed for {getattr(doc, 'name', '?')}\n\n{frappe.get_traceback()}")
@@ -418,9 +415,8 @@ def on_file_on_update(doc, method=None):
         if int(doc.is_private or 0):
             if is_configured("public"):
                 delete_object("public", key)
-            offload(doc)
-            # Never delete private files locally — Frappe's permission-checked
-            # /private/files/ handler needs them on disk for secure serving.
+            if offload(doc) and delete_on_upload():
+                _delete_local(doc)
         else:
             if offload(doc) and delete_on_upload():
                 _delete_local(doc)
