@@ -1241,6 +1241,64 @@ def reclaim_local_start(dry_run=1, limit=None):
     return {"queued": "reclaim_local", "dry_run": _truthy(dry_run), "limit": limit}
 
 
+@frappe.whitelist()
+def cleanup_orphans(dry_run=True):
+    """Delete File records where the file exists neither on local disk nor on Bunny.
+
+    Safe to run multiple times. Always dry_run first to review what will be deleted.
+    """
+    import os
+    frappe.only_for("System Manager")
+    dry_run = _truthy(dry_run) if isinstance(dry_run, str) else bool(dry_run)
+
+    files = frappe.get_all(
+        "File",
+        filters={"is_folder": 0},
+        fields=["name", "file_url", "file_name", "is_private", "file_size"],
+        limit_page_length=0,
+    )
+
+    stats = {"seen": 0, "orphans": 0, "deleted": 0, "kept": 0}
+
+    for f in files:
+        file_url = f.get("file_url") or ""
+        if not file_url.startswith(("/files/", "/private/files/")):
+            continue
+
+        stats["seen"] += 1
+
+        # Check local disk
+        try:
+            doc = frappe.get_doc("File", f["name"])
+            on_disk = os.path.exists(doc.get_full_path())
+        except Exception:
+            on_disk = False
+
+        # Check Bunny
+        kind = _zone_kind(f.get("is_private"))
+        key = normalize_key(file_url)
+        on_bunny, _ = head_object(kind, key)
+
+        if not on_disk and not on_bunny:
+            stats["orphans"] += 1
+            print(f"ORPHAN: {f['name']} {file_url}")
+            if not dry_run:
+                try:
+                    frappe.delete_doc("File", f["name"], ignore_permissions=True)
+                    stats["deleted"] += 1
+                except Exception:
+                    _log(f"cleanup_orphans: could not delete {f['name']}\n\n{frappe.get_traceback()}")
+        else:
+            stats["kept"] += 1
+
+    if not dry_run:
+        frappe.db.commit()
+
+    label = "DRY-RUN" if dry_run else "LIVE"
+    print(f"[{label}] cleanup_orphans: {stats}")
+    return stats
+
+
 # =========================================================================== #
 # 11. CDN FALLBACK — redirect /files/... to Bunny when local copy is gone
 # =========================================================================== #

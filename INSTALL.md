@@ -65,10 +65,10 @@ source env/bin/activate
 bench get-app git@github-yoisho:AshwiniUpadhy/yoisho_bunny.git
 
 # 2. Install the app on the site
-bench --site <your-site> install-app yoisho_bunny
+bench --site learning_plattform_site.com install-app yoisho_bunny
 
 # 3. Run migrations (syncs hooks, scheduled jobs, etc.)
-bench --site <your-site> migrate
+bench --site learning_plattform_site.com migrate
 
 # 4. Restart the bench
 bench restart
@@ -92,7 +92,7 @@ bench --site lms_site.com migrate
 ### Uninstall procedure (if needed)
 
 ```bash
-bench --site <your-site> uninstall-app yoisho_bunny --yes
+bench --site learning_plattform_site.com uninstall-app yoisho_bunny --yes
 bench remove-app yoisho_bunny
 ```
 
@@ -104,7 +104,7 @@ Frappe archives the removed app to `archived/apps/yoisho_bunny-<date>` automatic
 cd apps/yoisho_bunny
 git pull
 cd ../..
-bench --site <your-site> migrate
+bench --site learning_plattform_site.com migrate
 bench restart
 ```
 
@@ -115,7 +115,7 @@ bench restart
 Open the site config file:
 
 ```
-sites/<your-site>/site_config.json
+sites/learning_plattform_site.com/site_config.json
 ```
 
 Add the following keys alongside the existing DB config:
@@ -177,7 +177,7 @@ Then restart the bench. Without this, Server Scripts created in Frappe Desk will
 From the bench, confirm both zones are configured correctly:
 
 ```bash
-bench --site <your-site> execute yoisho_bunny.bunny.status
+bench --site learning_plattform_site.com execute yoisho_bunny.bunny.status
 ```
 
 Expected output should show:
@@ -202,13 +202,13 @@ Before enabling live offload, push all existing files to Bunny.
 **5a. Dry run first (no actual uploads, just a report):**
 
 ```bash
-bench --site <your-site> execute yoisho_bunny.bunny.backfill_run --kwargs "{'dry_run': True}"
+bench --site learning_plattform_site.com execute yoisho_bunny.bunny.backfill_run --kwargs "{'dry_run': True}"
 ```
 
 **5b. Live backfill (enqueued as a background job):**
 
 ```bash
-bench --site <your-site> execute yoisho_bunny.bunny.backfill_start --kwargs "{'dry_run': 0}"
+bench --site learning_plattform_site.com execute yoisho_bunny.bunny.backfill_start --kwargs "{'dry_run': 0}"
 ```
 
 Monitor progress in **Frappe Desk → Background Jobs**. Large sites may take 10–30 minutes.
@@ -216,7 +216,7 @@ Monitor progress in **Frappe Desk → Background Jobs**. Large sites may take 10
 **5c. Verify a sample of files landed on Bunny:**
 
 ```bash
-bench --site <your-site> execute yoisho_bunny.bunny.verify_sample --kwargs "{'n': 100}"
+bench --site learning_plattform_site.com execute yoisho_bunny.bunny.verify_sample --kwargs "{'n': 100}"
 ```
 
 Zero missing = backfill complete.
@@ -231,13 +231,13 @@ If course lesson content or other fields contain hardcoded absolute URLs like
 **Dry run:**
 
 ```bash
-bench --site <your-site> execute yoisho_bunny.bunny.rewrite_absolute_urls --kwargs "{'dry_run': True}"
+bench --site learning_plattform_site.com execute yoisho_bunny.bunny.rewrite_absolute_urls --kwargs "{'dry_run': True}"
 ```
 
 **Live:**
 
 ```bash
-bench --site <your-site> execute yoisho_bunny.bunny.rewrite_absolute_urls_start --kwargs "{'dry_run': 0}"
+bench --site learning_plattform_site.com execute yoisho_bunny.bunny.rewrite_absolute_urls_start --kwargs "{'dry_run': 0}"
 ```
 
 Skip this step if the output reports 0 fields affected.
@@ -285,13 +285,13 @@ delete the local originals that are confirmed on Bunny to free up disk.
 **Dry run (lists what would be deleted):**
 
 ```bash
-bench --site <your-site> execute yoisho_bunny.bunny.reclaim_local --kwargs "{'dry_run': True}"
+bench --site learning_plattform_site.com execute yoisho_bunny.bunny.reclaim_local --kwargs "{'dry_run': True}"
 ```
 
 **Live (enqueued as a background job):**
 
 ```bash
-bench --site <your-site> execute yoisho_bunny.bunny.reclaim_local_start --kwargs "{'dry_run': 0}"
+bench --site learning_plattform_site.com execute yoisho_bunny.bunny.reclaim_local_start --kwargs "{'dry_run': 0}"
 ```
 
 > **Only run this after verify_sample reports 0 missing files.**
