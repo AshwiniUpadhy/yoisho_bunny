@@ -3,72 +3,35 @@
 Step-by-step guide for deploying the Bunny.net media offload app onto a Frappe LMS bench.  
 Run these steps once per environment (local dev → staging → production).
 
-**GitHub repo:** `https://github.com/AshwiniUpadhy/yoisho_bunny` (private)
+**GitHub repo:** `https://github.com/AshwiniUpadhy/yoisho_bunny` (public)
 
 ---
 
 ## Prerequisites
 
 - Frappe bench already set up with the LMS app installed and running
-- SSH access to the server (needed once for installation; not needed for day-to-day operation after)
+- SSH access to the server
 - Bunny.net account with two Storage Zones and two Pull Zones created (public + private)
-- Bunny.net credentials ready (see **Step 3**)
-- SSH deploy key added to the server (see **Step 1**)
+- Bunny.net credentials ready (see **Step 2**)
 
 ---
 
-## Step 1 — Set up SSH deploy key on the server (one-time per server)
-
-The repo is private, so each server needs a deploy key to clone it.
-
-**On the server:**
-
-```bash
-# Generate a deploy key (no passphrase)
-ssh-keygen -t ed25519 -C "deploy-yoisho_bunny" -f ~/.ssh/id_ed25519_yoisho -N ""
-
-# Print the public key — copy this
-cat ~/.ssh/id_ed25519_yoisho.pub
-```
-
-**On GitHub:** Go to `github.com/AshwiniUpadhy/yoisho_bunny → Settings → Deploy keys → Add deploy key`  
-Paste the public key. Read-only access is sufficient.
-
-**Add an SSH alias on the server** — append to `~/.ssh/config`:
-
-```
-Host github-yoisho
-    HostName github.com
-    User git
-    IdentityFile ~/.ssh/id_ed25519_yoisho
-    IdentitiesOnly yes
-```
-
-**Test:**
-
-```bash
-ssh -T git@github-yoisho
-# Expected: Hi AshwiniUpadhy! You've successfully authenticated...
-```
-
----
-
-## Step 2 — Install the app into the bench
+## Step 1 — Install the app into the bench
 
 SSH into the server and run the following from inside the bench directory:
 
 ```bash
-cd ~/lms_backend/lms-bench        # staging path; adjust for production
+cd ~/lms_backend/lms-bench        # adjust path for your server
 source env/bin/activate
 
-# 1. Fetch and install the app from GitHub
-bench get-app git@github-yoisho:AshwiniUpadhy/yoisho_bunny.git
+# 1. Fetch the app from GitHub (public repo — no SSH key needed)
+bench get-app https://github.com/AshwiniUpadhy/yoisho_bunny.git
 
 # 2. Install the app on the site
-bench --site learning_plattform_site.com install-app yoisho_bunny
+bench --site <your-site-name> install-app yoisho_bunny
 
 # 3. Run migrations (syncs hooks, scheduled jobs, etc.)
-bench --site learning_plattform_site.com migrate
+bench --site <your-site-name> migrate
 
 # 4. Restart the bench
 bench restart
@@ -92,7 +55,7 @@ bench --site lms_site.com migrate
 ### Uninstall procedure (if needed)
 
 ```bash
-bench --site learning_plattform_site.com uninstall-app yoisho_bunny --yes
+bench --site <your-site-name> uninstall-app yoisho_bunny --yes
 bench remove-app yoisho_bunny
 ```
 
@@ -104,18 +67,18 @@ Frappe archives the removed app to `archived/apps/yoisho_bunny-<date>` automatic
 cd apps/yoisho_bunny
 git pull
 cd ../..
-bench --site learning_plattform_site.com migrate
+bench --site <your-site-name> migrate
 bench restart
 ```
 
 ---
 
-## Step 3 — Add Bunny.net credentials to site_config.json
+## Step 2 — Add Bunny.net credentials to site_config.json
 
 Open the site config file:
 
 ```
-sites/learning_plattform_site.com/site_config.json
+sites/<your-site-name>/site_config.json
 ```
 
 Add the following keys alongside the existing DB config:
@@ -152,13 +115,25 @@ Add the following keys alongside the existing DB config:
 | `bunny_private_token_key`  | Private Pull Zone → **Security** tab → Token Authentication → secret key (enable Token Authentication first)                                                       |
 | `bunny_api_key`            | Bunny.net Account → **API** section → Account API Key                                                                                                              |
 
-> **Keep `bunny_enabled: 0` until Step 5 is complete.**
+> **Keep `bunny_enabled: 0` until Step 4 is complete.**
 
 After editing, restart the bench to reload the config:
 
 ```bash
 bench restart
 ```
+
+### Keep logos and favicons on local Frappe storage (optional)
+
+To prevent specific files from being offloaded to Bunny (e.g. logos, favicons used in
+the Frappe UI itself), add a `bunny_local_patterns` list to `site_config.json`:
+
+```json
+"bunny_local_patterns": "[\"/files/logo\", \"/files/favicon\"]"
+```
+
+Any `/files/` URL that starts with one of these prefixes will be stored locally only and
+never uploaded to Bunny. Adjust the list to match your actual file name prefixes.
 
 ### Enable Server Scripts (required for day-to-day operation)
 
@@ -172,12 +147,12 @@ Then restart the bench. Without this, Server Scripts created in Frappe Desk will
 
 ---
 
-## Step 4 — Verify configuration
+## Step 3 — Verify configuration
 
 From the bench, confirm both zones are configured correctly:
 
 ```bash
-bench --site learning_plattform_site.com execute yoisho_bunny.bunny.status
+bench --site <your-site-name> execute yoisho_bunny.bunny.status
 ```
 
 Expected output should show:
@@ -195,35 +170,35 @@ If either `public_configured` or `private_configured` is `false`, recheck the cr
 
 ---
 
-## Step 5 — Backfill existing files to Bunny
+## Step 4 — Backfill existing files to Bunny
 
 Before enabling live offload, push all existing files to Bunny.
 
-**5a. Dry run first (no actual uploads, just a report):**
+**4a. Dry run first (no actual uploads, just a report):**
 
 ```bash
-bench --site learning_plattform_site.com execute yoisho_bunny.bunny.backfill_run --kwargs "{'dry_run': True}"
+bench --site <your-site-name> execute yoisho_bunny.bunny.backfill_run --kwargs "{'dry_run': True}"
 ```
 
-**5b. Live backfill (enqueued as a background job):**
+**4b. Live backfill (enqueued as a background job):**
 
 ```bash
-bench --site learning_plattform_site.com execute yoisho_bunny.bunny.backfill_start --kwargs "{'dry_run': 0}"
+bench --site <your-site-name> execute yoisho_bunny.bunny.backfill_start --kwargs "{'dry_run': 0}"
 ```
 
 Monitor progress in **Frappe Desk → Background Jobs**. Large sites may take 10–30 minutes.
 
-**5c. Verify a sample of files landed on Bunny:**
+**4c. Verify a sample of files landed on Bunny:**
 
 ```bash
-bench --site learning_plattform_site.com execute yoisho_bunny.bunny.verify_sample --kwargs "{'n': 100}"
+bench --site <your-site-name> execute yoisho_bunny.bunny.verify_sample --kwargs "{'n': 100}"
 ```
 
 Zero missing = backfill complete.
 
 ---
 
-## Step 6 — Rewrite legacy absolute URLs (if applicable)
+## Step 5 — Rewrite legacy absolute URLs (if applicable)
 
 If course lesson content or other fields contain hardcoded absolute URLs like
 `https://edu.yoisho.in/files/...`, strip them to relative paths:
@@ -231,20 +206,20 @@ If course lesson content or other fields contain hardcoded absolute URLs like
 **Dry run:**
 
 ```bash
-bench --site learning_plattform_site.com execute yoisho_bunny.bunny.rewrite_absolute_urls --kwargs "{'dry_run': True}"
+bench --site <your-site-name> execute yoisho_bunny.bunny.rewrite_absolute_urls --kwargs "{'dry_run': True}"
 ```
 
 **Live:**
 
 ```bash
-bench --site learning_plattform_site.com execute yoisho_bunny.bunny.rewrite_absolute_urls_start --kwargs "{'dry_run': 0}"
+bench --site <your-site-name> execute yoisho_bunny.bunny.rewrite_absolute_urls_start --kwargs "{'dry_run': 0}"
 ```
 
 Skip this step if the output reports 0 fields affected.
 
 ---
 
-## Step 7 — Enable the integration
+## Step 6 — Enable the integration
 
 Once the backfill and verify_sample pass with zero missing files, enable live offload:
 
@@ -260,10 +235,12 @@ Then restart the bench. From this point:
 - Files deleted in Frappe are also deleted from Bunny
 - A public→private privacy flip removes the file from the public zone immediately
 - A daily reconciliation sweep runs as a backstop
+- Missing public files (`/files/`) are redirected to Bunny CDN automatically
+- Missing private files (`/private/files/`) redirect to a time-limited signed Bunny URL for authenticated users
 
 ---
 
-## Step 8 — Point the frontend at the CDN
+## Step 7 — Point the frontend at the CDN
 
 In the frontend deployment, set the environment variable:
 
@@ -277,21 +254,21 @@ through `get_signed_media_url`.
 
 ---
 
-## Step 9 (Phase 1.5, optional) — Reclaim local disk space
+## Step 8 (Phase 1.5) — Reclaim public file disk space
 
 After running on the CDN for a soak period (recommended: 1–2 weeks with zero 404s),
-delete the local originals that are confirmed on Bunny to free up disk.
+delete the local public file originals that are confirmed on Bunny to free up disk.
 
 **Dry run (lists what would be deleted):**
 
 ```bash
-bench --site learning_plattform_site.com execute yoisho_bunny.bunny.reclaim_local --kwargs "{'dry_run': True}"
+bench --site <your-site-name> execute yoisho_bunny.bunny.reclaim_local --kwargs "{'dry_run': True}"
 ```
 
 **Live (enqueued as a background job):**
 
 ```bash
-bench --site learning_plattform_site.com execute yoisho_bunny.bunny.reclaim_local_start --kwargs "{'dry_run': 0}"
+bench --site <your-site-name> execute yoisho_bunny.bunny.reclaim_local_start --kwargs "{'dry_run': 0}"
 ```
 
 > **Only run this after verify_sample reports 0 missing files.**
@@ -300,29 +277,64 @@ bench --site learning_plattform_site.com execute yoisho_bunny.bunny.reclaim_loca
 
 ---
 
+## Step 9 (Phase 2) — Reclaim private file disk space
+
+Private files are redirected to signed Bunny CDN URLs when their local copy is missing,
+so it is safe to reclaim them once you have verified the private CDN redirect works.
+
+**Verify private redirect first** — upload a private file, note its URL, then test:
+
+```bash
+# Check it landed on Bunny
+bench --site <your-site-name> execute yoisho_bunny.bunny.check_file \
+  --kwargs "{'file_url': '/private/files/<your-test-file>'}"
+
+# Access the private URL while logged in — should redirect to a signed Bunny URL
+curl -I https://<your-site>/<your-private-file-url> -H "Cookie: <session-cookie>"
+```
+
+Once confirmed, reclaim private files:
+
+**Dry run:**
+
+```bash
+bench --site <your-site-name> execute yoisho_bunny.bunny.reclaim_local \
+  --kwargs "{'dry_run': True, 'include_private': True}"
+```
+
+**Live:**
+
+```bash
+bench --site <your-site-name> execute yoisho_bunny.bunny.reclaim_local_start \
+  --kwargs "{'dry_run': 0, 'include_private': True}"
+```
+
+---
+
 ## Day-to-day operation (no SSH needed)
 
 After installation, all operations can be triggered from **Frappe Desk → Server Scripts**
 using `frappe.call()` or `frappe.enqueue()`. All methods require System Manager role.
 
-| Method                                                    | What it does                                                 |
-| --------------------------------------------------------- | ------------------------------------------------------------ |
-| `yoisho_bunny.bunny.status`                               | Check current config and zone status                         |
-| `yoisho_bunny.bunny.enable`                               | Turn offload ON                                              |
-| `yoisho_bunny.bunny.disable`                              | Kill-switch — stops all offloads, existing CDN keeps serving |
-| `yoisho_bunny.bunny.set_setting(name, value)`             | Change a non-secret setting at runtime                       |
-| `yoisho_bunny.bunny.offload_one(file_name, force)`        | Manually offload / retry a single file                       |
-| `yoisho_bunny.bunny.check_file(file_url)`                 | Check if a file exists on Bunny                              |
-| `yoisho_bunny.bunny.list_bunny_files(kind, path_prefix)`  | List files in a storage zone                                 |
-| `yoisho_bunny.bunny.delete_one(file_url, kind)`           | Delete a single object from Bunny                            |
-| `yoisho_bunny.bunny.purge_cdn_url(file_url)`              | Purge one URL from the CDN cache                             |
-| `yoisho_bunny.bunny.verify_sample(n)`                     | HEAD-check n recent files on Bunny                           |
-| `yoisho_bunny.bunny.reconcile_now`                        | Run reconciliation sweep immediately                         |
-| `yoisho_bunny.bunny.backfill_start(dry_run, limit)`       | Enqueue backfill of existing files                           |
-| `yoisho_bunny.bunny.rewrite_absolute_urls_start(dry_run)` | Enqueue legacy URL rewrite                                   |
-| `yoisho_bunny.bunny.reclaim_local_start(dry_run, limit)`  | Enqueue Phase 1.5 disk cleanup                               |
-| `yoisho_bunny.bunny.get_signed_media_url(file_url, ttl)`  | Get signed URL for private file                              |
-| `yoisho_bunny.bunny.run_purge(dry_run, confirm_token)`    | Phase 2 — purge old batch media                              |
+| Method                                                                   | What it does                                                    |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| `yoisho_bunny.bunny.status`                                              | Check current config and zone status                            |
+| `yoisho_bunny.bunny.enable`                                              | Turn offload ON                                                 |
+| `yoisho_bunny.bunny.disable`                                             | Kill-switch — stops all offloads, existing CDN keeps serving    |
+| `yoisho_bunny.bunny.set_setting(name, value)`                            | Change a non-secret setting at runtime                          |
+| `yoisho_bunny.bunny.offload_one(file_name, force)`                       | Manually offload / retry a single file                          |
+| `yoisho_bunny.bunny.check_file(file_url)`                                | Check if a file exists on Bunny                                 |
+| `yoisho_bunny.bunny.list_bunny_files(kind, path_prefix)`                 | List files in a storage zone                                    |
+| `yoisho_bunny.bunny.delete_one(file_url, kind)`                          | Delete a single object from Bunny                               |
+| `yoisho_bunny.bunny.purge_cdn_url(file_url)`                             | Purge one URL from the CDN cache                                |
+| `yoisho_bunny.bunny.verify_sample(n)`                                    | HEAD-check n recent files on Bunny                              |
+| `yoisho_bunny.bunny.reconcile_now`                                       | Run reconciliation sweep immediately                            |
+| `yoisho_bunny.bunny.backfill_start(dry_run, limit)`                      | Enqueue backfill of existing files                              |
+| `yoisho_bunny.bunny.rewrite_absolute_urls_start(dry_run)`                | Enqueue legacy URL rewrite                                      |
+| `yoisho_bunny.bunny.reclaim_local_start(dry_run, limit)`                 | Enqueue Phase 1.5 public disk cleanup                           |
+| `yoisho_bunny.bunny.reclaim_local_start(dry_run, limit, include_private)`| Enqueue Phase 2 private disk cleanup (include_private=True)     |
+| `yoisho_bunny.bunny.cleanup_orphans(dry_run)`                            | Delete File records that exist neither on disk nor on Bunny     |
+| `yoisho_bunny.bunny.get_signed_media_url(file_url, ttl)`                 | Get signed URL for a private file                               |
 
 **Example Server Script (API type):**
 
@@ -350,18 +362,19 @@ frappe.response["message"] = result
 These can be changed at runtime via `set_setting` or directly in `site_config.json`
 followed by a bench restart:
 
-| Setting name        | Description                                            |
-| ------------------- | ------------------------------------------------------ |
-| `enabled`           | Master kill-switch (`1`/`0`)                           |
-| `offload_enabled`   | Pause new-upload offload without disabling signed URLs |
-| `reconcile_enabled` | Enable/disable the daily reconciliation sweep          |
-| `signed_url_ttl`    | Signed URL lifetime in seconds (60–3600, default 300)  |
-| `public_host`       | CDN hostname for public files                          |
-| `private_host`      | CDN hostname for private files                         |
-| `public_zone`       | Public storage zone name                               |
-| `private_zone`      | Private storage zone name                              |
-| `public_folders`    | List of path prefixes routed to the public zone        |
-| `region`            | Storage region prefix (empty = Frankfurt)              |
+| Setting name        | Description                                                          |
+| ------------------- | -------------------------------------------------------------------- |
+| `enabled`           | Master kill-switch (`1`/`0`)                                         |
+| `offload_enabled`   | Pause new-upload offload without disabling signed URLs               |
+| `reconcile_enabled` | Enable/disable the daily reconciliation sweep                        |
+| `signed_url_ttl`    | Signed URL lifetime in seconds (60–3600, default 300)                |
+| `public_host`       | CDN hostname for public files                                        |
+| `private_host`      | CDN hostname for private files                                       |
+| `public_zone`       | Public storage zone name                                             |
+| `private_zone`      | Private storage zone name                                            |
+| `public_folders`    | List of path prefixes routed to the public zone                      |
+| `local_patterns`    | List of `/files/` prefixes to keep on local Frappe (logos, favicons) |
+| `region`            | Storage region prefix (empty = Frankfurt)                            |
 
 > **Secrets** (`bunny_public_password`, `bunny_private_password`,
 > `bunny_private_token_key`, `bunny_api_key`) can only be changed in
@@ -380,7 +393,7 @@ followed by a bench restart:
 
 - Rerun `backfill_start` with `dry_run: 0` — it skips already-uploaded files (idempotent)
 
-**Private file 401 errors:**
+**Private file 401 / 403 errors from Bunny:**
 
 - Confirm `bunny_private_token_key` matches the key in Pull Zone → Security → Token Authentication
 - Token Authentication must be **enabled** on the private Pull Zone
