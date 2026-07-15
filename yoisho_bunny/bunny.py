@@ -1121,10 +1121,16 @@ def purge_cdn_url(file_url):
 # =========================================================================== #
 
 def reclaim_local(dry_run=True, limit=None):
-    """Delete local originals that are verified to exist on Bunny.
+    """Delete local originals of PUBLIC files that are verified to exist on Bunny.
 
-    Iterates all File docs, HEAD-checks each on Bunny, deletes the local copy
-    only on a confirmed 200. Never touches a file that Bunny returns 404 for.
+    Only reclaims public files (is_private=0 / /files/ paths). Private files
+    are intentionally excluded: they are served by Frappe with auth checks and
+    a CDN redirect for private paths is not yet implemented.  Running reclaim on
+    private files would make them inaccessible until signed-URL serving is wired
+    to the frontend — so Phase 1 reclaim is public-only.
+
+    HEAD-checks each file on Bunny before deleting; never deletes a file that
+    Bunny returns 404 for.
     """
     import os
 
@@ -1137,7 +1143,7 @@ def reclaim_local(dry_run=True, limit=None):
     while True:
         rows = frappe.get_all(
             "File",
-            filters={"is_folder": 0},
+            filters={"is_folder": 0, "is_private": 0},
             fields=["name", "file_url", "is_private", "file_size"],
             order_by="creation asc",
             limit_start=start,
