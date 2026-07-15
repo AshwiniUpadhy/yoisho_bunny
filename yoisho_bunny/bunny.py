@@ -1120,14 +1120,14 @@ def purge_cdn_url(file_url):
 # without proof). Safe to re-run: already-deleted files are a no-op (skipped).
 # =========================================================================== #
 
-def reclaim_local(dry_run=True, limit=None):
-    """Delete local originals of PUBLIC files that are verified to exist on Bunny.
+def reclaim_local(dry_run=True, limit=None, include_private=False):
+    """Delete local originals that are verified to exist on Bunny.
 
-    Only reclaims public files (is_private=0 / /files/ paths). Private files
-    are intentionally excluded: they are served by Frappe with auth checks and
-    a CDN redirect for private paths is not yet implemented.  Running reclaim on
-    private files would make them inaccessible until signed-URL serving is wired
-    to the frontend — so Phase 1 reclaim is public-only.
+    By default only reclaims public files (is_private=0 / /files/ paths).
+    Pass include_private=True to also reclaim private files — only safe once
+    the Phase 2 private-file CDN redirect (_apply_private_file_patch) is active,
+    because reclaimed private files are served via signed Bunny URLs instead of
+    from local disk.
 
     HEAD-checks each file on Bunny before deleting; never deletes a file that
     Bunny returns 404 for.
@@ -1138,12 +1138,17 @@ def reclaim_local(dry_run=True, limit=None):
         print("bunny_enabled is falsy — aborting.")
         return
 
+    include_private = _truthy(include_private) if isinstance(include_private, str) else bool(include_private)
+    filters = {"is_folder": 0}
+    if not include_private:
+        filters["is_private"] = 0
+
     stats = {"seen": 0, "reclaimed": 0, "skipped": 0, "not_on_bunny": 0, "failed": 0}
     start = 0
     while True:
         rows = frappe.get_all(
             "File",
-            filters={"is_folder": 0, "is_private": 0},
+            filters=filters,
             fields=["name", "file_url", "is_private", "file_size"],
             order_by="creation asc",
             limit_start=start,
@@ -1236,15 +1241,20 @@ def _print_reclaim_stats(stats, dry_run):
 
 
 @frappe.whitelist()
-def reclaim_local_start(dry_run=1, limit=None):
-    """Enqueue Phase-1.5 local disk reclamation as a background job."""
+def reclaim_local_start(dry_run=1, limit=None, include_private=False):
+    """Enqueue local disk reclamation as a background job.
+
+    include_private=True also reclaims private files (Phase 2 — only run after
+    verifying the private CDN redirect is working on this environment).
+    """
     frappe.only_for("System Manager")
+    include_private = _truthy(include_private) if isinstance(include_private, str) else bool(include_private)
     frappe.enqueue(
         "yoisho_bunny.bunny.reclaim_local",
         queue="long", timeout=36000, job_name="bunny_reclaim_local",
-        dry_run=_truthy(dry_run), limit=limit,
+        dry_run=_truthy(dry_run), limit=limit, include_private=include_private,
     )
-    return {"queued": "reclaim_local", "dry_run": _truthy(dry_run), "limit": limit}
+    return {"queued": "reclaim_local", "dry_run": _truthy(dry_run), "limit": limit, "include_private": include_private}
 
 
 @frappe.whitelist()
@@ -1524,3 +1534,57 @@ def _cdn_redirect_before_request():
 
 
 _apply_cdn_fallback_patch()
+
+
+def _apply_private_file_patch():
+    """
+    Wrap frappe.utils.response.download_private_file so that private files
+    that have been reclaimed from local disk are redirected to a signed Bunny
+    CDN URL instead of returning 404.
+
+    frappe/app.py dispatches /private/files/ requests to download_private_file,
+    which already performs the full Frappe auth check (Guest block + file
+    permission check) before trying to read from disk.  Our wrapper runs AFTER
+    those checks, so a signed URL is only ever issued to an authorised caller.
+
+    Timing: bunny.py is imported during hooks loading in Flask before_request,
+    which always runs before the /private/files/ route handler — so this patch
+    is applied before the first private-file request in every process, with no
+    cold-start gap (unlike the StaticDataMiddleware patch for public files).
+    """
+    try:
+        import frappe.utils.response as _fpr
+        if getattr(_fpr, "_bunny_private_patched", False):
+            return
+
+        from werkzeug.exceptions import NotFound as _NotFound
+
+        _orig = _fpr.download_private_file
+
+        def _bunny_download_private_file(path):
+            try:
+                return _orig(path)
+            except _NotFound:
+                # File is authorised but missing from local disk — try Bunny.
+                try:
+                    if enabled() and is_configured("private"):
+                        cdn_url = sign_private_url(path, ttl_seconds=signed_url_ttl())
+                        from werkzeug.utils import redirect as _redirect
+                        return _redirect(cdn_url, 302)
+                except Exception as _exc:
+                    import logging as _log
+                    _log.getLogger("yoisho_bunny").warning(
+                        "private CDN fallback error for %s: %s", path, _exc
+                    )
+                raise _NotFound()
+
+        _fpr.download_private_file = _bunny_download_private_file
+        _fpr._bunny_private_patched = True
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger("yoisho_bunny").warning(
+            "yoisho_bunny: private file patch failed: %s", _e
+        )
+
+
+_apply_private_file_patch()
