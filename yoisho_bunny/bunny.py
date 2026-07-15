@@ -296,21 +296,25 @@ def public_url(key):
 def sign_private_url(file_url, ttl_seconds=300):
     """Mint a Bunny CDN Token-Authentication (V2, SHA256, query-string) URL.
 
-    hashable = security_key + path + str(expires)
+    hashable = security_key + decoded_path + str(expires)
     token    = urlsafe_base64( sha256(hashable) )  with '=' stripped
-    url      = {private_host}{path}?token={token}&expires={expires}
+    url      = {private_host}{encoded_path}?token={token}&expires={expires}
+
+    Bunny decodes the URL path before verifying the token, so the hash must be
+    computed on the decoded path even though the CDN URL uses the encoded form.
 
     IMPORTANT: the pull zone's Token Authentication settings must match this
     scheme (SHA256, query token, no IP/path locking). Validate against the live
     pull zone before relying on it — see BACKEND_HANDOFF.md §11.
     """
-    path = "/" + normalize_key(file_url)
+    encoded_path = "/" + normalize_key(file_url)
+    hash_path = "/" + unquote(normalize_key(file_url))
     expires = int(time.time()) + int(ttl_seconds)
-    hashable = f"{private_token_key()}{path}{expires}"
+    hashable = f"{private_token_key()}{hash_path}{expires}"
     digest = hashlib.sha256(hashable.encode("utf-8")).digest()
     token = base64.b64encode(digest).decode("ascii")
     token = token.replace("\n", "").replace("+", "-").replace("/", "_").replace("=", "")
-    return f"{private_host()}{path}?token={token}&expires={expires}"
+    return f"{private_host()}{encoded_path}?token={token}&expires={expires}"
 
 
 # =========================================================================== #
